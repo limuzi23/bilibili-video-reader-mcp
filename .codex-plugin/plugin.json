@@ -1,0 +1,20 @@
+{
+  "name": "bilibili-video-reader",
+  "version": "2.0.0",
+  "description": "Extract Bilibili multi-P metadata and official/AI subtitles through a live MCP server, then organize them into study notes, methods, questions, and code.",
+  "license": "MIT",
+  "keywords": ["bilibili", "subtitle", "transcript", "study", "video"],
+  "skills": "./skills/",
+  "interface": {
+    "displayName": "Bilibili Video Reader",
+    "shortDescription": "Read Bilibili subtitles and multi-P videos",
+    "longDescription": "Connects ChatGPT to a read-only MCP backend for Bilibili video metadata and subtitles, with a bundled workflow for study notes and programming-video summaries.",
+    "developerName": "Personal",
+    "category": "Productivity",
+    "capabilities": ["Read"],
+    "defaultPrompt": [
+      "整理这个 B 站视频的字幕和方法。",
+      "把这个 B 站合集所有分 P 的题目和 Python 解法整理出来。"
+    ]
+  }
+}
