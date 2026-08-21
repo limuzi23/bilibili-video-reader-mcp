@@ -1,6 +1,6 @@
 {
   "name": "bilibili-video-reader",
-  "version": "2.0.0",
+  "version": "2.1.0",
   "description": "Extract Bilibili multi-P metadata and official/AI subtitles through a live MCP server, then organize them into study notes, methods, questions, and code.",
   "license": "MIT",
   "keywords": ["bilibili", "subtitle", "transcript", "study", "video"],
