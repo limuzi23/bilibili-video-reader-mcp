@@ -3,7 +3,7 @@ name: bilibili-video-reader
 description: Read Bilibili videos and multi-P collections through the Bilibili Video Reader MCP tools, extract official/AI subtitles, and turn them into faithful study notes, problem/method summaries, and Python solutions. Use when the user provides a bilibili.com/B23/BV link and asks for subtitles, transcript, all parts, methods, questions, code, or a collection summary.
 ---
 
-# Bilibili Video Reader v2
+# Bilibili Video Reader v2.1
 
 Use the bundled MCP tools for live Bilibili data. Do not run local yt-dlp scripts in ChatGPT.
 
@@ -43,5 +43,6 @@ When the user asks for all P, the final answer must state how many parts were di
 ## Security
 
 - Never ask the user to paste passwords, `SESSDATA`, access tokens, or raw cookie text into chat.
-- Login-only subtitle support is configured on the user's private MCP deployment through a secret cookie file (`BILI_COOKIES_FILE`).
+- Public subtitle access requires no secret.
+- If login-only subtitle support is needed, it may be configured privately as an encrypted Cloudflare Worker secret named `BILI_COOKIE`; the user should set it directly in Cloudflare, never in chat or GitHub.
 - Do not bypass paywalls, VIP restrictions, DRM, geographic restrictions, or account permissions.
