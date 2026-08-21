@@ -1,78 +1,97 @@
-# Bilibili Video Reader v2
+# Bilibili Video Reader v2.1
 
-A read-only ChatGPT/Codex plugin built as **Skill + MCP server**.
-
-[![Deploy to Render](https://render.com/images/deploy-to-render-button.svg)](https://render.com/deploy?repo=https%3A%2F%2Fgithub.com%2Flimuzi23%2Fbilibili-video-reader-mcp)
-
-## What v2 fixes
-
-The v1 Skill tried to run `yt-dlp` inside ChatGPT's sandbox. v2 moves live Bilibili access into a deployable MCP backend. The Skill only controls the workflow and formatting.
+A read-only ChatGPT/Codex plugin built as **Skill + stateless MCP server**, now targeting **Cloudflare Workers** so it can run without Render or a credit card.
 
 ## MCP tools
 
 - `get_bilibili_video_parts(url)` — title, author, description, all P numbers and CIDs.
 - `get_bilibili_part_transcript(url, part, language, max_chars)` — official/AI subtitle tracks and timestamped transcript for one P.
 
-The backend calls:
+The Worker calls Bilibili's metadata/player/subtitle endpoints directly. No video download is needed for subtitle mode.
 
-- `https://api.bilibili.com/x/web-interface/view`
-- `https://api.bilibili.com/x/player/v2`
+## Deploy to Cloudflare Workers
 
-No video download is needed for subtitle mode.
+### Dashboard path
 
-## Deploy
+1. Create/sign in to a Cloudflare account.
+2. Open **Workers & Pages** → **Create** → **Import a repository** (wording may vary slightly).
+3. Connect GitHub and select `limuzi23/bilibili-video-reader-mcp`.
+4. Keep the repository root as the root directory.
+5. Cloudflare should detect `wrangler.jsonc` automatically.
+6. Use the default deploy command: `npx wrangler deploy`.
+7. Deploy.
 
-### Render (simple path)
+The Worker name must remain `bilibili-video-reader-mcp` because it matches `wrangler.jsonc`.
 
-1. Click the **Deploy to Render** button above.
-2. Sign in to Render and authorize the GitHub repository if prompted.
-3. Review the Blueprint and deploy it. The included `render.yaml` uses a free web service in Singapore.
-4. Wait until `https://<your-service>/health` returns JSON with `status: ok`.
-5. Your MCP URL is `https://<your-service>/mcp`.
-
-For public subtitles, no secret is required.
-
-### Optional login-state subtitles
-
-On a private deployment only, mount a Netscape-format Bilibili cookie file and set:
+After deployment, Cloudflare will give you a URL similar to:
 
 ```text
-BILI_COOKIES_FILE=/run/secrets/bilibili-cookies.txt
+https://bilibili-video-reader-mcp.<your-subdomain>.workers.dev
 ```
 
-Do **not** paste raw cookies into ChatGPT or commit cookie files to Git.
+Health check:
+
+```text
+https://bilibili-video-reader-mcp.<your-subdomain>.workers.dev/health
+```
+
+MCP endpoint:
+
+```text
+https://bilibili-video-reader-mcp.<your-subdomain>.workers.dev/mcp
+```
+
+For public subtitles, no runtime secret is required.
+
+### Optional private login state
+
+If a subtitle is only visible while logged in, the Worker can read an optional Cloudflare secret named `BILI_COOKIE`. Configure it only inside Cloudflare's encrypted **Variables and Secrets** UI. Never paste raw cookies into ChatGPT and never commit them to GitHub.
 
 ## Connect to ChatGPT
 
 1. ChatGPT → Settings → Security and login → enable **Developer mode**.
-2. Open Plugins, press `+`, and register the deployed MCP URL ending in `/mcp`.
-3. Copy the technical ID from the created connection URL. It begins with `plugin_asdk_app_`.
-4. In this project run:
+2. Open Plugins, press `+`, and register the deployed URL ending in `/mcp`.
+3. Copy the technical ID from the created connection. It begins with `plugin_asdk_app_`.
+4. Run `python scripts/configure_plugin.py plugin_asdk_app_YOUR_ID` if the plugin packaging flow requires an app reference.
+
+The OpenAI plugin manifest lives at `.codex-plugin/plugin.json` and the workflow Skill is in `skills/bilibili-video-reader/`.
+
+## Local development
 
 ```bash
-python scripts/configure_plugin.py plugin_asdk_app_YOUR_ID
+npm install
+npm run dev
 ```
 
-5. Package/install the plugin from this folder (or use `@plugin-creator`).
-
-The OpenAI plugin manifest lives at `.codex-plugin/plugin.json`; after step 4 it references `.app.json`.
-
-## Local checks
+Deploy from a local terminal if desired:
 
 ```bash
-python -m py_compile server/bili_client.py server/server.py scripts/configure_plugin.py
-python -m pytest server/tests
+npm run deploy
 ```
 
-For a full MCP test after installing dependencies:
+Endpoints:
 
-```bash
-cd server
-python server.py
-# MCP endpoint: http://localhost:8000/mcp
-# health:       http://localhost:8000/health
+```text
+GET  /health
+MCP  /mcp
 ```
+
+## Architecture
+
+The current production path is:
+
+```text
+ChatGPT Skill
+    ↓
+Cloudflare Workers /mcp
+    ↓
+Bilibili metadata/player/subtitle APIs
+    ↓
+structured multi-P metadata + timestamped subtitles
+```
+
+The old `server/` Python implementation remains in the repository only as a reference/legacy implementation; Cloudflare does not use it.
 
 ## Current scope
 
-v2.0 intentionally focuses on **metadata + official/AI subtitles**. It does not yet download audio/video, run Whisper ASR, or OCR code from frames. Those can be added after the public-subtitle path is connected and verified end-to-end.
+v2.1 focuses on **multi-P metadata + official/AI subtitles**. It does not yet download audio/video, run Whisper ASR, or OCR source code from video frames. Those are planned only after this subtitle path is verified end-to-end.
