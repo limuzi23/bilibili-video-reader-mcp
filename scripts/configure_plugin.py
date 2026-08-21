@@ -12,19 +12,19 @@ APP = ROOT / ".app.json"
 
 
 def main() -> int:
-    if len(sys.argv) != 2 or not re.fullmatch(r"plugin_asdk_app_[A-Za-z0-9_-]+", sys.argv[1]):
-        print("Usage: python scripts/configure_plugin.py plugin_asdk_app_<technical-id>")
+    if len(sys.argv) != 2 or not re.fullmatch(r"asdk_app_[A-Za-z0-9_-]+", sys.argv[1]):
+        print("Usage: python scripts/configure_plugin.py asdk_app_<application-id>")
         return 2
-    technical_id = sys.argv[1]
+    application_id = sys.argv[1]
 
     APP.write_text(
-        json.dumps({"apps": {"bilibili-video-reader": {"id": technical_id}}}, ensure_ascii=False, indent=2) + "\n",
+        json.dumps({"apps": {"bilibili-video-reader": {"id": application_id}}}, ensure_ascii=False, indent=2) + "\n",
         encoding="utf-8",
     )
     manifest = json.loads(MANIFEST.read_text(encoding="utf-8"))
     manifest["apps"] = "./.app.json"
     MANIFEST.write_text(json.dumps(manifest, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
-    print(f"Configured {technical_id}")
+    print(f"Configured {application_id}")
     return 0
 
 
