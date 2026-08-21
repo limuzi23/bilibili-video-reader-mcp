@@ -1,7 +1,7 @@
 {
   "name": "bilibili-video-reader",
-  "version": "2.1.1",
-  "description": "Extract Bilibili multi-P metadata and official/AI subtitles through a live MCP server, then organize them into study notes, methods, questions, and code.",
+  "version": "2.2.0",
+  "description": "Extract Bilibili multi-P metadata and official/AI subtitles through a live MCP server with automatic Browser Run fallback for cloud anti-abuse responses, then organize them into study notes, methods, questions, and code.",
   "license": "MIT",
   "keywords": ["bilibili", "subtitle", "transcript", "study", "video"],
   "skills": "./skills/",
@@ -9,7 +9,7 @@
   "interface": {
     "displayName": "Bilibili Video Reader",
     "shortDescription": "Read Bilibili subtitles and multi-P videos",
-    "longDescription": "Connects ChatGPT to a read-only MCP backend for Bilibili video metadata and subtitles, with a bundled workflow for study notes and programming-video summaries.",
+    "longDescription": "Connects ChatGPT to a read-only MCP backend for Bilibili video metadata and subtitles. Direct requests are attempted first; HTTP 412/429 automatically fall back to Cloudflare Browser Run.",
     "developerName": "Personal",
     "category": "Productivity",
     "capabilities": ["Read"],
