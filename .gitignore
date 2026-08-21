@@ -4,5 +4,8 @@ __pycache__/
 .venv/
 .env
 .app.json
+node_modules/
+.wrangler/
+.dev.vars
 *bilibili*cookies*
 *.cookies.txt
