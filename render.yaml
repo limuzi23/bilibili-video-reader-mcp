@@ -1,0 +1,8 @@
+services:
+  - type: web
+    name: bilibili-video-reader-mcp
+    runtime: docker
+    dockerfilePath: ./server/Dockerfile
+    dockerContext: ./server
+    healthCheckPath: /health
+    autoDeploy: true
