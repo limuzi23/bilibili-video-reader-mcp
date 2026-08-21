@@ -1,7 +1,7 @@
 {
   "apps": {
     "bilibili-video-reader": {
-      "id": "plugin_asdk_app_REPLACE_WITH_YOUR_TECHNICAL_ID"
+      "id": "asdk_app_REPLACE_WITH_YOUR_APPLICATION_ID"
     }
   }
 }
