@@ -1,13 +1,14 @@
 {
   "name": "bilibili-video-reader-mcp",
-  "version": "2.1.0",
+  "version": "2.2.0",
   "private": true,
   "type": "module",
   "scripts": {
-    "dev": "wrangler dev",
+    "dev": "wrangler dev --remote",
     "deploy": "wrangler deploy"
   },
   "dependencies": {
+    "@cloudflare/puppeteer": "^1.1.0",
     "@modelcontextprotocol/server": "2.0.0",
     "agents": "^0.20.0",
     "zod": "^4.0.0"
