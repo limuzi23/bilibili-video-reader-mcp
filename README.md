@@ -2,6 +2,8 @@
 
 A read-only ChatGPT/Codex plugin built as **Skill + MCP server**.
 
+[![Deploy to Render](https://render.com/images/deploy-to-render-button.svg)](https://render.com/deploy?repo=https%3A%2F%2Fgithub.com%2Flimuzi23%2Fbilibili-video-reader-mcp)
+
 ## What v2 fixes
 
 The v1 Skill tried to run `yt-dlp` inside ChatGPT's sandbox. v2 moves live Bilibili access into a deployable MCP backend. The Skill only controls the workflow and formatting.
@@ -22,10 +24,11 @@ No video download is needed for subtitle mode.
 
 ### Render (simple path)
 
-1. Put this folder in a GitHub repository.
-2. In Render, create a Blueprint from the repo. `render.yaml` builds `server/Dockerfile`.
-3. Wait until `https://<your-service>/health` returns JSON with `status: ok`.
-4. Your MCP URL is `https://<your-service>/mcp`.
+1. Click the **Deploy to Render** button above.
+2. Sign in to Render and authorize the GitHub repository if prompted.
+3. Review the Blueprint and deploy it. The included `render.yaml` uses a free web service in Singapore.
+4. Wait until `https://<your-service>/health` returns JSON with `status: ok`.
+5. Your MCP URL is `https://<your-service>/mcp`.
 
 For public subtitles, no secret is required.
 
