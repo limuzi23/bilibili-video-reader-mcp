@@ -1,5 +1,6 @@
 import { createMcpHandler } from "agents/mcp/server";
 import { McpServer } from "@modelcontextprotocol/server";
+import puppeteer from "@cloudflare/puppeteer";
 import { z } from "zod";
 
 const BVID_RE = /BV[0-9A-Za-z]{10,}/;
@@ -10,6 +11,24 @@ const BASE_HEADERS = {
   "Accept-Language": "zh-CN,zh;q=0.9,en;q=0.7"
 };
 
+const memoryCache = new Map();
+
+class AntiAbuseError extends Error {}
+
+function cacheGet(key) {
+  const item = memoryCache.get(key);
+  if (!item) return null;
+  if (Date.now() > item.expiresAt) {
+    memoryCache.delete(key);
+    return null;
+  }
+  return item.value;
+}
+
+function cacheSet(key, value, ttlMs) {
+  memoryCache.set(key, { value, expiresAt: Date.now() + ttlMs });
+}
+
 function allowedHost(hostname) {
   const host = hostname.toLowerCase();
   return host === "bilibili.com" || host === "www.bilibili.com" || host === "m.bilibili.com" || host === "api.bilibili.com" || host === "b23.tv" || host.endsWith(".bilibili.com") || host.endsWith(".hdslb.com");
@@ -19,6 +38,30 @@ function headers(env) {
   const out = new Headers(BASE_HEADERS);
   if (env?.BILI_COOKIE) out.set("Cookie", env.BILI_COOKIE);
   return out;
+}
+
+function isAntiAbuseCode(code) {
+  return [-352, -412].includes(Number(code));
+}
+
+function cookieObjects(cookieHeader) {
+  if (!cookieHeader) return [];
+  return String(cookieHeader)
+    .split(";")
+    .map((piece) => piece.trim())
+    .filter(Boolean)
+    .map((piece) => {
+      const index = piece.indexOf("=");
+      if (index <= 0) return null;
+      return {
+        name: piece.slice(0, index).trim(),
+        value: piece.slice(index + 1).trim(),
+        domain: ".bilibili.com",
+        path: "/",
+        secure: true
+      };
+    })
+    .filter(Boolean);
 }
 
 async function resolveBvid(input, env) {
@@ -50,7 +93,7 @@ async function resolveBvid(input, env) {
   throw new Error("Could not resolve a BV ID from this Bilibili link.");
 }
 
-async function fetchJson(urlString, params, env) {
+function buildUrl(urlString, params) {
   const url = new URL(urlString);
   if (url.protocol !== "https:" || !allowedHost(url.hostname)) {
     throw new Error("Refusing to fetch a non-Bilibili HTTPS endpoint.");
@@ -60,13 +103,17 @@ async function fetchJson(urlString, params, env) {
       if (value !== undefined && value !== null) url.searchParams.set(key, String(value));
     }
   }
+  return url;
+}
 
+async function fetchJsonDirect(urlString, params, env) {
+  const url = buildUrl(urlString, params);
   let lastError;
   for (let attempt = 0; attempt < 2; attempt += 1) {
     try {
       const response = await fetch(url.toString(), { headers: headers(env) });
       if (response.status === 412 || response.status === 429) {
-        throw new Error(`Bilibili rate-limited the request (HTTP ${response.status}). Retry later.`);
+        throw new AntiAbuseError(`Bilibili blocked the direct request (HTTP ${response.status}).`);
       }
       if (!response.ok) throw new Error(`Bilibili request failed (HTTP ${response.status}).`);
       const data = await response.json();
@@ -76,29 +123,145 @@ async function fetchJson(urlString, params, env) {
       return data;
     } catch (error) {
       lastError = error;
+      if (error instanceof AntiAbuseError) break;
       if (attempt === 0) await new Promise((resolve) => setTimeout(resolve, 350));
     }
   }
   throw lastError instanceof Error ? lastError : new Error("Bilibili request failed.");
 }
 
+async function browserFetchJson(urlString, params, env, bootstrapBvid = null) {
+  if (!env?.BROWSER) throw new Error("Browser Run binding is unavailable.");
+  const target = buildUrl(urlString, params);
+  const browser = await puppeteer.launch(env.BROWSER);
+  try {
+    const page = await browser.newPage();
+    await page.setUserAgent(BASE_HEADERS["User-Agent"]);
+    await page.setExtraHTTPHeaders({
+      "Accept-Language": BASE_HEADERS["Accept-Language"],
+      "Referer": BASE_HEADERS.Referer
+    });
+
+    const cookies = cookieObjects(env?.BILI_COOKIE);
+    if (cookies.length) await page.setCookie(...cookies);
+
+    if (bootstrapBvid) {
+      try {
+        await page.goto(`https://www.bilibili.com/video/${bootstrapBvid}`, {
+          waitUntil: "domcontentloaded",
+          timeout: 25000
+        });
+      } catch {
+        // The API navigation below may still work even if the video page times out.
+      }
+    } else {
+      try {
+        await page.goto("https://www.bilibili.com/", {
+          waitUntil: "domcontentloaded",
+          timeout: 15000
+        });
+      } catch {
+        // Continue to the target API/CDN URL.
+      }
+    }
+
+    const response = await page.goto(target.toString(), {
+      waitUntil: "domcontentloaded",
+      timeout: 30000
+    });
+    if (!response) throw new Error("Browser Run received no response from Bilibili.");
+    const status = response.status();
+    if (status === 412 || status === 429) {
+      throw new AntiAbuseError(`Bilibili also blocked the browser fallback (HTTP ${status}).`);
+    }
+    if (status < 200 || status >= 300) {
+      throw new Error(`Bilibili browser fallback failed (HTTP ${status}).`);
+    }
+    const text = await response.text();
+    const data = JSON.parse(text);
+    if (!data || typeof data !== "object" || Array.isArray(data)) {
+      throw new Error("Bilibili browser fallback returned an unexpected JSON response.");
+    }
+    return data;
+  } finally {
+    await browser.close();
+  }
+}
+
+async function fetchWithBrowserFallback(urlString, params, env, bootstrapBvid = null) {
+  try {
+    return { payload: await fetchJsonDirect(urlString, params, env), strategy: "direct" };
+  } catch (error) {
+    if (!(error instanceof AntiAbuseError) || !env?.BROWSER) throw error;
+    return {
+      payload: await browserFetchJson(urlString, params, env, bootstrapBvid),
+      strategy: "browser_run"
+    };
+  }
+}
+
 async function getVideoInfo(input, env) {
   const bvid = await resolveBvid(input, env);
-  const payload = await fetchJson("https://api.bilibili.com/x/web-interface/view", { bvid }, env);
+  const cached = cacheGet(`meta:${bvid}`);
+  if (cached) return cached;
+
+  let result = await fetchWithBrowserFallback(
+    "https://api.bilibili.com/x/web-interface/view",
+    { bvid },
+    env,
+    bvid
+  );
+
+  if (isAntiAbuseCode(result.payload?.code) && result.strategy === "direct" && env?.BROWSER) {
+    result = {
+      payload: await browserFetchJson("https://api.bilibili.com/x/web-interface/view", { bvid }, env, bvid),
+      strategy: "browser_run"
+    };
+  }
+
+  const payload = result.payload;
   if (payload.code !== 0) {
-    throw new Error(`Bilibili metadata API error: ${payload.message || "unknown error"} (code ${payload.code}).`);
+    const message = payload.message || "unknown error";
+    if (isAntiAbuseCode(payload.code)) throw new AntiAbuseError(`Bilibili anti-abuse response: ${message} (code ${payload.code}).`);
+    throw new Error(`Bilibili metadata API error: ${message} (code ${payload.code}).`);
   }
   if (!payload.data || typeof payload.data !== "object") throw new Error("Bilibili metadata response has no data object.");
-  return payload.data;
+
+  const value = { data: payload.data, strategy: result.strategy };
+  cacheSet(`meta:${bvid}`, value, 30 * 60 * 1000);
+  return value;
 }
 
 async function getPlayerInfo(bvid, cid, env) {
-  const payload = await fetchJson("https://api.bilibili.com/x/player/v2", { bvid, cid }, env);
+  const cacheKey = `player:${bvid}:${cid}`;
+  const cached = cacheGet(cacheKey);
+  if (cached) return cached;
+
+  let result = await fetchWithBrowserFallback(
+    "https://api.bilibili.com/x/player/wbi/v2",
+    { bvid, cid },
+    env,
+    bvid
+  );
+
+  if (isAntiAbuseCode(result.payload?.code) && result.strategy === "direct" && env?.BROWSER) {
+    result = {
+      payload: await browserFetchJson("https://api.bilibili.com/x/player/wbi/v2", { bvid, cid }, env, bvid),
+      strategy: "browser_run"
+    };
+  }
+
+  const payload = result.payload;
   if (payload.code !== 0) {
-    throw new Error(`Bilibili player API error: ${payload.message || "unknown error"} (code ${payload.code}).`);
+    const message = payload.message || "unknown error";
+    if (isAntiAbuseCode(payload.code)) throw new AntiAbuseError(`Bilibili player anti-abuse response: ${message} (code ${payload.code}).`);
+    throw new Error(`Bilibili player API error: ${message} (code ${payload.code}).`);
   }
   if (!payload.data || typeof payload.data !== "object") throw new Error("Bilibili player response has no data object.");
-  return payload.data;
+
+  const value = { data: payload.data, strategy: result.strategy };
+  cacheSet(cacheKey, value, 10 * 60 * 1000);
+  return value;
 }
 
 function pagesFromVideo(data) {
@@ -140,17 +303,25 @@ function ts(seconds) {
   return [h, m, s].map((n) => String(n).padStart(2, "0")).join(":");
 }
 
-async function subtitleBody(subtitleUrl, env) {
+async function subtitleBody(subtitleUrl, env, bvid) {
   const normalized = subtitleUrl.startsWith("//") ? `https:${subtitleUrl}` : subtitleUrl;
-  const payload = await fetchJson(normalized, null, env);
+  const cacheKey = `subtitle:${normalized}`;
+  const cached = cacheGet(cacheKey);
+  if (cached) return cached;
+
+  const result = await fetchWithBrowserFallback(normalized, null, env, bvid);
+  const payload = result.payload;
   if (!Array.isArray(payload.body)) throw new Error("Subtitle JSON has an unexpected body format.");
-  return payload.body
+  const body = payload.body
     .filter((item) => item && typeof item === "object" && String(item.content || "").trim())
     .map((item) => ({
       start: Number(item.from || 0),
       end: Number(item.to ?? item.from ?? 0),
       text: String(item.content || "").trim()
     }));
+  const value = { body, strategy: result.strategy };
+  cacheSet(cacheKey, value, 30 * 60 * 1000);
+  return value;
 }
 
 function asToolText(value) {
@@ -158,19 +329,20 @@ function asToolText(value) {
 }
 
 function createServer(env) {
-  const server = new McpServer({ name: "bilibili-video-reader", version: "2.1.0" });
+  const server = new McpServer({ name: "bilibili-video-reader", version: "2.2.0" });
 
   server.registerTool(
     "get_bilibili_video_parts",
     {
-      description: "Get title, author, description, and every P/cid in a Bilibili multi-part video. Call this before requesting transcripts.",
+      description: "Get title, author, description, and every P/cid in a Bilibili multi-part video. Automatically falls back to a real browser session if Bilibili blocks direct cloud requests.",
       inputSchema: {
         url: z.string().min(1).describe("A bilibili.com/b23.tv video URL or a BV ID.")
       }
     },
     async ({ url }) => {
       try {
-        const data = await getVideoInfo(url, env);
+        const info = await getVideoInfo(url, env);
+        const data = info.data;
         const bvid = String(data.bvid || "");
         const owner = data.owner && typeof data.owner === "object" ? data.owner : {};
         const parts = pagesFromVideo(data)
@@ -192,10 +364,16 @@ function createServer(env) {
           author: String(owner.name || "") || null,
           description: String(data.desc || "") || null,
           total_parts: parts.length,
+          fetch_strategy: info.strategy,
           parts
         });
       } catch (error) {
-        return asToolText({ status: "error", total_parts: 0, parts: [], error: error instanceof Error ? error.message : String(error) });
+        return asToolText({
+          status: "error",
+          total_parts: 0,
+          parts: [],
+          error: error instanceof Error ? error.message : String(error)
+        });
       }
     }
   );
@@ -203,7 +381,7 @@ function createServer(env) {
   server.registerTool(
     "get_bilibili_part_transcript",
     {
-      description: "Fetch official/AI Bilibili subtitles for one P and return a cleaned timestamped transcript. Never invent content when status is login_required or no_subtitles.",
+      description: "Fetch official/AI Bilibili subtitles for one P and return a cleaned timestamped transcript. Automatically falls back to Browser Run on HTTP 412/429. Never invent missing content.",
       inputSchema: {
         url: z.string().min(1).describe("A bilibili.com/b23.tv video URL or a BV ID."),
         part: z.number().int().min(1).optional().describe("1-based P number. Defaults to 1."),
@@ -213,13 +391,15 @@ function createServer(env) {
     },
     async ({ url, part = 1, language = "auto", max_chars = 120000 }) => {
       try {
-        const data = await getVideoInfo(url, env);
+        const info = await getVideoInfo(url, env);
+        const data = info.data;
         const bvid = String(data.bvid || "");
         const pages = pagesFromVideo(data);
         const selected = pages.find((page, index) => Number(page.page || index + 1) === part);
         if (!selected) return asToolText({ status: "error", bvid: bvid || null, part, error: `Part P${part} does not exist.` });
 
-        const player = await getPlayerInfo(bvid, Number(selected.cid), env);
+        const playerResult = await getPlayerInfo(bvid, Number(selected.cid), env);
+        const player = playerResult.data;
         const subtitle = player.subtitle && typeof player.subtitle === "object" ? player.subtitle : {};
         const tracks = Array.isArray(subtitle.subtitles) ? subtitle.subtitles.filter((t) => t && typeof t === "object") : [];
         const available_tracks = tracks.map((track) => ({
@@ -235,9 +415,13 @@ function createServer(env) {
             bvid: bvid || null,
             part,
             part_title: String(selected.part || `P${part}`),
+            fetch_strategy: {
+              metadata: info.strategy,
+              player: playerResult.strategy
+            },
             available_tracks,
             error: needLogin
-              ? "Bilibili reports that subtitle access requires a logged-in session. Configure a BILI_COOKIE secret only on your private Cloudflare Worker; never paste raw cookies into chat or commit them to Git."
+              ? "Bilibili reports that subtitle access requires a logged-in session. You can add BILI_COOKIE as a private Cloudflare Worker secret; never paste raw cookies into chat or commit them to Git."
               : "This part currently exposes no official/AI subtitle track."
           });
         }
@@ -247,11 +431,11 @@ function createServer(env) {
           return asToolText({ status: "no_subtitles", bvid: bvid || null, part, part_title: String(selected.part || `P${part}`), available_tracks, error: "Subtitle metadata exists but no usable subtitle URL was returned." });
         }
 
-        const body = await subtitleBody(String(track.subtitle_url), env);
+        const subtitleResult = await subtitleBody(String(track.subtitle_url), env, bvid);
         const segments = [];
         const lines = [];
         let chars = 0;
-        for (const seg of body) {
+        for (const seg of subtitleResult.body) {
           const timestamp = ts(seg.start);
           const line = `[${timestamp}] ${seg.text}`;
           if (chars + line.length + 1 > max_chars) break;
@@ -268,6 +452,11 @@ function createServer(env) {
           language: String(track.lan || "unknown"),
           language_name: String(track.lan_doc || "") || null,
           source: isAiTrack(track) ? "ai" : "official",
+          fetch_strategy: {
+            metadata: info.strategy,
+            player: playerResult.strategy,
+            subtitle_json: subtitleResult.strategy
+          },
           available_tracks,
           segments,
           transcript: lines.join("\n")
@@ -285,7 +474,14 @@ export default {
   async fetch(request, env, ctx) {
     const url = new URL(request.url);
     if (url.pathname === "/health") {
-      return Response.json({ status: "ok", service: "bilibili-video-reader", runtime: "cloudflare-workers", version: "2.1.0" });
+      return Response.json({
+        status: "ok",
+        service: "bilibili-video-reader",
+        runtime: "cloudflare-workers",
+        version: "2.2.0",
+        browser_fallback: Boolean(env?.BROWSER),
+        login_cookie_configured: Boolean(env?.BILI_COOKIE)
+      });
     }
     if (url.pathname !== "/mcp") {
       return new Response("Bilibili Video Reader MCP. Use /mcp or /health.", { status: 200 });
