@@ -2,6 +2,8 @@ services:
   - type: web
     name: bilibili-video-reader-mcp
     runtime: docker
+    plan: free
+    region: singapore
     dockerfilePath: ./server/Dockerfile
     dockerContext: ./server
     healthCheckPath: /health
